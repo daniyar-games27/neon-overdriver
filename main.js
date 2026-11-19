@@ -1,0 +1,60 @@
+import * as THREE from 'three';
+import {createPlayer,updatePlayerAnimation,setPlayerColor} from './player.js';
+import {createWorld,resetWorld,updateWorld,getObstacles,getPickups,collectCrystal,disposeWorld} from './world.js';
+import {createCamera,updateCamera,cameraShake,resetCamera} from './camera.js';
+import {createControls,updateControls,getControlState,setControlsEnabled,resetControls,disposeControls} from './controls.js';
+import {createEffects,spawnCollisionEffect,spawnCollectionEffect,spawnPlayerTrail,updateEffects,resetEffects,setEffectsEnabled,disposeEffects} from './effects.js';
+import {createAudio,initializeAudio,startAmbient,playCollision,playCollect,startEngine,updateEngine,stopEngine,stopAmbient,setMasterVolume,setAudioEnabled,pauseAudio,resumeAudio,disposeAudio} from './audio.js';
+import {createInterface,showScreen,showGameInterface,updateHUD,resetHUD,showResults,getBestScore,showNotification,disposeInterface} from './interface.js';
+import {createProgression,startRun,updateProgress,finishRun,getProgress,getDailyMissions,getCostumes,cycleCostume,getSelectedCostume,getAchievementList} from './progression.js';
+import {createSettings,getQualityPreset,setQuality,setVolume,applyGraphicsSettings} from './settings.js';
+
+const canvas=document.getElementById('game-canvas');
+const isTouch=window.matchMedia?.('(pointer: coarse)').matches||innerWidth<760;
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x070b16);scene.fog=new THREE.Fog(0x070b16,28,145);
+const camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.1,250);
+const renderer=new THREE.WebGLRenderer({canvas,antialias:!isTouch,alpha:false,powerPreference:'high-performance'});
+renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(Math.min(devicePixelRatio||1,isTouch?1:1.5));renderer.shadowMap.enabled=false;renderer.shadowMap.type=THREE.BasicShadowMap;
+scene.add(new THREE.HemisphereLight(0x8bbcff,0x101020,1.7));
+const keyLight=new THREE.DirectionalLight(0x9beaff,2.2);keyLight.position.set(-8,18,8);keyLight.castShadow=false;scene.add(keyLight);
+const rim=new THREE.PointLight(0x9b38ff,18,45);rim.position.set(5,7,-18);scene.add(rim);
+const ui=createInterface(),settings=createSettings(),progress=createProgression(),audio=createAudio();
+const player=createPlayer(scene),world=createWorld(scene),cameraState=createCamera(camera),controls=createControls(player,{sensitivity:settings.controlSensitivity,swipeSurface:canvas}),effects=createEffects(scene);
+setControlsEnabled(controls,false);
+let game={state:'menu',speed:0,maxSpeed:30,distance:0,score:0,energy:100,crystals:0,collisionCooldown:0,uiTimer:0};let previous=0;
+function renderProgress(){const p=getProgress(progress),daily=getDailyMissions(progress),costume=getSelectedCostume(progress),ach=getAchievementList(progress);const el=id=>document.getElementById(id);
+ if(el('profile-level'))el('profile-level').textContent=p.level;if(el('profile-xp'))el('profile-xp').textContent=`${Math.floor(p.xp)} / ${p.level*500} XP`;if(el('profile-coins'))el('profile-coins').textContent=p.coins;if(el('profile-best'))el('profile-best').textContent=Math.floor(p.bestScore);if(el('achievement-count'))el('achievement-count').textContent=`${p.achievements.length}/${ach.length}`;
+ if(el('daily-list'))el('daily-list').innerHTML=daily.map(q=>`<div class="daily-row"><span>${q.title} · ${q.reward} CR</span><strong>${q.completed?'ГОТОВО':`${Math.floor(q.progress)}/${q.target}`}</strong><div class="daily-track"><i style="width:${Math.min(100,q.progress/q.target*100)}%"></i></div></div>`).join('');
+ if(el('costume-button'))el('costume-button').textContent=`ОБРАЗ: ${costume.name}`;
+ if(el('achievement-list'))el('achievement-list').innerHTML=ach.map(a=>`<div class="achievement-item ${a.unlocked?'unlocked':''}"><strong>${a.unlocked?'✦':'◇'} ${a.name}</strong><span>${a.desc}</span></div>`).join('');
+}
+function applyCostume(){const c=getSelectedCostume(progress);setPlayerColor(player,c.color);renderProgress();}
+function applySettings(){const p=applyGraphicsSettings(settings,renderer);keyLight.castShadow=!!p.shadows;if(p.shadows){keyLight.shadow.mapSize.set(512,512);keyLight.shadow.camera.left=-35;keyLight.shadow.camera.right=35;keyLight.shadow.camera.top=35;keyLight.shadow.camera.bottom=-35;keyLight.shadow.bias=-.0002;}setMasterVolume(audio,settings.masterVolume);setAudioEnabled(audio,settings.soundEnabled);setEffectsEnabled(effects,settings.effectsEnabled&&settings.particlesEnabled);}
+function resetGame(){game.speed=0;game.distance=0;game.score=0;game.energy=100;game.crystals=0;game.collisionCooldown=0;resetWorld(world);resetControls(controls);resetCamera(cameraState,player);resetEffects(effects);resetHUD();startRun(progress);}
+function startGame(){if(game.state==='playing')return;resetGame();game.state='playing';setControlsEnabled(controls,true);showGameInterface();applySettings();initializeAudio(audio).then(()=>{if(game.state==='playing'){startAmbient(audio);startEngine(audio);}});}
+function pauseGame(){if(game.state!=='playing')return;game.state='paused';setControlsEnabled(controls,false);stopEngine(audio);pauseAudio(audio);showScreen('pause-menu');}
+function resumeGame(){if(game.state!=='paused')return;game.state='playing';setControlsEnabled(controls,true);showGameInterface();resumeAudio(audio).then(()=>startEngine(audio));}
+function endGame(){if(game.state!=='playing')return;game.state='results';setControlsEnabled(controls,false);stopEngine(audio);stopAmbient(audio);playCollision(audio);const result=finishRun(progress);showResults({distance:game.distance,score:game.score});renderProgress();if(result.earned?.length)showNotification(`ДОСТИЖЕНИЕ: ${result.earned[0]}`);}
+function returnMenu(){game.state='menu';setControlsEnabled(controls,false);stopEngine(audio);stopAmbient(audio);showScreen('main-menu');renderProgress();}
+function collide(){if(game.collisionCooldown>0)return;game.collisionCooldown=.8;game.energy=Math.max(0,game.energy-35);cameraShake(cameraState,.45);spawnCollisionEffect(effects,player.position.clone().add(new THREE.Vector3(0,1,0)));playCollision(audio);if(game.energy<=0)endGame();else showNotification('СИСТЕМА ПОВРЕЖДЕНА');}
+function checkWorld(){const playerX=player.position.x,py=player.position.y;
+ for(const o of getObstacles(world)){const pos=new THREE.Vector3();o.mesh.getWorldPosition(pos);const dz=Math.abs(pos.z);if(dz<1.35&&Math.abs(pos.x-playerX)<(o.type==='traffic'?1.35:1.25)){if(o.type==='laser'&&!controls.isSliding)collide();else if(o.type==='barrier'&&py<1.05)collide();else if(o.type==='block'&&py<2.65)collide();else if(o.type==='traffic'&&py<1.4)collide();}}
+ for(const p of getPickups(world)){if(p.collected)continue;const pos=new THREE.Vector3();p.mesh.getWorldPosition(pos);if(Math.abs(pos.z)<1.4&&Math.abs(pos.x-playerX)<1.2&&collectCrystal(p)){game.crystals++;game.score+=100;updateProgress(progress,{crystals:game.crystals,scoreDelta:100});spawnCollectionEffect(effects,pos);playCollect(audio);}}
+}
+function frame(t){requestAnimationFrame(frame);const delta=Math.min((t-previous)/1000||0,.05);previous=t;
+ if(game.state==='playing'){game.speed=Math.min(game.maxSpeed,game.speed+delta*5);updateControls(controls,delta);updateWorld(world,delta,game.speed);updatePlayerAnimation(player,delta,controls.isSliding?'slide':controls.isJumping?'jump':'run',Math.max(.2,game.speed/12));updateCamera(cameraState,player,delta,{speed:game.speed,maxSpeed:game.maxSpeed,lane:controls.lane-1,jumping:controls.isJumping,sliding:controls.isSliding,accelerating:game.speed<game.maxSpeed});spawnPlayerTrail(effects,player);checkWorld();game.collisionCooldown=Math.max(0,game.collisionCooldown-delta);game.distance=world.totalDistance;const scoreDelta=delta*game.speed*.8;game.score+=scoreDelta;updateEngine(audio,game.speed);updateProgress(progress,{distance:game.distance,score:game.score,crystals:game.crystals,deltaDistance:game.speed*delta,scoreDelta});updateHUD({distance:game.distance,score:game.score,energy:game.energy,speed:game.speed*4});game.uiTimer+=delta;if(game.uiTimer>.5){renderProgress();game.uiTimer=0;}}
+ else if(game.state==='menu'||game.state==='results')updateEffects(effects,delta,0);
+ if(game.state==='playing')updateEffects(effects,delta,game.speed);
+ renderer.render(scene,camera);
+}
+function bind(id,fn){document.getElementById(id)?.addEventListener('click',fn);}
+bind('play-button',startGame);bind('retry-button',startGame);bind('restart-button',startGame);bind('pause-button',pauseGame);bind('resume-button',resumeGame);bind('menu-button',returnMenu);bind('results-menu-button',returnMenu);
+bind('settings-button',()=>showScreen('settings-menu'));bind('settings-back',()=>showScreen('main-menu'));
+bind('progress-button',()=>{renderProgress();showScreen('progress-screen');});bind('progress-back',()=>showScreen('main-menu'));
+bind('costume-button',()=>{const c=cycleCostume(progress);applyCostume();showNotification(`ОБРАЗ: ${c.name}`);});
+document.getElementById('quality-select')?.addEventListener('change',e=>{setQuality(settings,e.target.value);applySettings();});
+document.getElementById('volume-slider')?.addEventListener('input',e=>{setVolume(settings,Number(e.target.value));setMasterVolume(audio,settings.masterVolume);});
+window.addEventListener('keydown',e=>{if(e.key==='Escape'){if(game.state==='playing')pauseGame();else if(game.state==='paused')resumeGame();else if(game.state==='menu'&&document.getElementById('progress-screen')?.classList.contains('active'))showScreen('main-menu');}});
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);applySettings();});
+window.addEventListener('beforeunload',()=>{disposeControls(controls);disposeWorld(world);disposeEffects(effects);disposeAudio(audio);disposeInterface();});
+document.getElementById('quality-select').value=settings.quality;document.getElementById('volume-slider').value=settings.masterVolume;applySettings();applyCostume();showScreen('main-menu');requestAnimationFrame(frame);

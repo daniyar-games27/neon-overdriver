@@ -1,0 +1,7 @@
+{
+  "name": "neon-overdrive",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "description": "NEON: OVERDRIVE — mobile-first browser runner"
+}
